@@ -805,6 +805,27 @@ public final class AE2CCAdapterBlockEntity extends AENetworkBlockEntity implemen
                     }).filter(Objects::nonNull).toList();
         }
 
+        @LuaFunction(mainThread = true)
+        public final Map<String, Object> getItem(String id) throws LuaException {
+            IGrid grid = blockEntity.getMainNode().getGrid();
+            if (grid == null) throw new LuaException("Cannot connect to AE2 Network");
+
+            MEStorage inventory = grid.getStorageService().getInventory();
+
+            Optional<Item> maybeItem = BuiltInRegistries.ITEM.getOptional(new ResourceLocation(id));
+
+            if (maybeItem.isEmpty()) throw new LuaException("Invalid item id " + id);
+
+            AEItemKey key = AEItemKey.of(maybeItem.get());
+
+            long amount = inventory.getAvailableStacks().get(key);
+
+            return Map.of(
+                    "name", id,
+                    "amount", amount
+            );
+        }
+
     }
 
 }

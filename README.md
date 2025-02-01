@@ -333,6 +333,13 @@ Returns a list of items that are currently available in the ME system.
 1. `{ { id = string, displayName = string, amount = number }... }`
    a table with a list of items available in the ME system
 
+### `getItem(item_id)`
+
+Returns information about an item in the ME system.
+
+#### Returns
+1. `{ id = string, amount = number }` Always returned, amount is 0 if it's not in the system
+
 ## Versioning
 
 AE2CC Bridge uses a custom versioning scheme that follows the spirit of the
