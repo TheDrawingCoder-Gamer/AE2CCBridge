@@ -15,14 +15,14 @@ ME system from [ComputerCraft](https://github.com/cc-tweaked/cc-restitched) comp
 
 ## Peripheral API - Crafting (Functions)
 
-### `getAvailableObjects()`
+### `isItemCraftable(item_id)`
 
-Returns a list of objects that are currently available in the ME system.
+Returns if this item is craftable
 
 #### Returns
+1. `boolean`
 
-1. `{ { type = string, id = string, displayName = string, amount = number }... }` –
-   a table with a list of objects available in the ME system
+
 
 
 ### `getCraftableObjects()`
@@ -248,6 +248,90 @@ Returns the (estimated) amount of power stored in the ME system.
 
 1. `number` – the estimated stored power
 
+## Peripheral API - Item Storage
+
+### `importItem(item_id, count, target_side)`
+
+#### Parameters
+
+1. `item_id`: `string` - id of item to be imported
+2. `count`: `int` - amount to be imported
+3. `target_side`: `string` - side of PERIPHERAL to look for storage
+
+#### Returns
+
+1. `int` - amount of items imported
+
+#### Remarks
+
+`target_side` is not a relative side: it's one of
+
+* `up`
+* `down`
+* `north`
+* `east`
+* `south`
+* `west`
+
+This matches the facing direction in the debug menu.
+
+### `exportItem(item_id, count, target_side)`
+
+#### Parameters
+
+1. `item_id`: `string` - id of item to be exported
+2. `count`: `number` - amount to be exported
+3. `target_side`: `string` - side of PERIPHERAL to look for storage
+
+#### Returns
+
+1. `number` - amount of items exported
+
+#### Remarks
+
+See importItem for information on `target_side`.
+
+### `importItemFromPeripheral(item_id, count, peripheral_name)`
+
+#### Parameters
+
+1. `item_id`: `string` - id of item to be imported
+2. `count`: `number` - amount to be imported
+3. `peripheral_name`: `string` - the name of the `inventory` peripheral to import items from
+
+#### Returns
+
+1. `number` - amount of items imported
+
+### `exportItemToPeripheral(item_id, count, peripheral_name)`
+
+#### Parameters
+
+1. `item_id`: `string` - id of item to be exported
+2. `count`: `number` - amount to be exported
+3. `peripheral_name`: `string` - the name of the `inventory` peripheral to export items to
+
+#### Returns
+
+1. `number` - amount of items exported
+
+### `getAvailableObjects()`
+
+Returns a list of objects that are currently available in the ME system.
+
+#### Returns
+
+1. `{ { type = string, id = string, displayName = string, amount = number }... }` –
+   a table with a list of objects available in the ME system
+
+### `listItems()`
+
+Returns a list of items that are currently available in the ME system.
+
+#### Returns
+
+1. `{ { id = string, displayName = string, amount = number }... }`
+   a table with a list of items available in the ME system
 
 ## Versioning
 

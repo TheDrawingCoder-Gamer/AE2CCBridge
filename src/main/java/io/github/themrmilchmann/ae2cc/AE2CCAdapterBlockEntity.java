@@ -39,9 +39,16 @@ import appeng.me.helpers.IGridConnectedBlockEntity;
 import com.google.common.collect.ImmutableSet;
 import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.api.lua.LuaFunction;
+import dan200.computercraft.api.peripheral.GenericPeripheral;
 import dan200.computercraft.api.peripheral.IComputerAccess;
 import dan200.computercraft.api.peripheral.IPeripheral;
+import net.fabricmc.fabric.api.transfer.v1.item.ItemStorage;
+import net.fabricmc.fabric.api.transfer.v1.item.ItemVariant;
+import net.fabricmc.fabric.api.transfer.v1.storage.SlottedStorage;
+import net.fabricmc.fabric.api.transfer.v1.storage.Storage;
+import net.fabricmc.fabric.api.transfer.v1.transaction.Transaction;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -49,6 +56,8 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluid;
 import org.apache.logging.log4j.LogManager;
@@ -290,7 +299,7 @@ public final class AE2CCAdapterBlockEntity extends AENetworkBlockEntity implemen
         data.put("jobs", jobsTag);
     }
 
-    @SuppressWarnings("FinalMethodInFinalClass")
+    @SuppressWarnings({"FinalMethodInFinalClass", "UnstableApiUsage"})
     public final class AdapterPeripheral implements IPeripheral {
 
         private final ReentrantLock attachedComputerLock = new ReentrantLock();
@@ -377,6 +386,22 @@ public final class AE2CCAdapterBlockEntity extends AENetworkBlockEntity implemen
                 })
                 .filter(Objects::nonNull)
                 .toList();
+        }
+
+        @LuaFunction(mainThread = true)
+        public final boolean isItemCraftable(String id) throws LuaException {
+            IGrid grid = blockEntity.getMainNode().getGrid();
+            if (grid == null) throw new LuaException("Cannot connect to AE2 Network");
+
+            ICraftingService craftingService = grid.getCraftingService();
+
+            Optional<Item> maybeItem = BuiltInRegistries.ITEM.getOptional(new ResourceLocation(id));
+
+            if (maybeItem.isEmpty()) throw new LuaException("Invalid item id " + id);
+
+            AEItemKey key = AEItemKey.of(maybeItem.get());
+
+            return craftingService.isCraftable(key);
         }
 
         @LuaFunction(mainThread = true)
@@ -587,6 +612,197 @@ public final class AE2CCAdapterBlockEntity extends AENetworkBlockEntity implemen
 
             IEnergyService energyService = grid.getEnergyService();
             return energyService.getStoredPower();
+        }
+
+
+        private static Direction getSide(String dir) throws LuaException {
+            if (dir.equals("bottom")) {
+                return Direction.DOWN;
+            } else if (dir.equals("top")) {
+                return Direction.UP;
+            } else {
+                Direction res = Direction.byName(dir);
+                if (res == null) {
+                    throw new LuaException("Bad direction " + dir);
+                } else {
+                    return res;
+                }
+            }
+        }
+
+        // copied from internals of CC:Tweaked
+        @Nullable
+        private static SlottedStorage<ItemVariant> extractContainerImpl(Level level, BlockPos pos, BlockState state, @Nullable BlockEntity be, @Nullable Direction dir) {
+            var internal = ItemStorage.SIDED.find(level, pos, state, be, null);
+            if (internal instanceof SlottedStorage<ItemVariant> storage) return storage;
+
+            // currently dead code until i fix sided inventories
+            if (dir != null) {
+                var external = ItemStorage.SIDED.find(level, pos, state, be, dir);
+                if (external instanceof SlottedStorage<ItemVariant> storage) return storage;
+            }
+
+            return null;
+        }
+        // copied from internals of CC:Tweaked
+        @Nullable
+        private static SlottedStorage<ItemVariant> extractHandler(IPeripheral peripheral) {
+            var object = peripheral.getTarget();
+            // TODO: sided inventories with just public api?
+            Direction dir = null;
+
+            if (object instanceof BlockEntity be) {
+                if (be.isRemoved()) return null;
+                if (be.getLevel() == null) return null;
+
+                return extractContainerImpl(be.getLevel(), be.getBlockPos(), be.getBlockState(), be, dir);
+            }
+
+            return null;
+        }
+
+        // Items
+
+        private double importItemCommon(Storage<ItemVariant> container, String id, long count) throws LuaException {
+            IGrid grid = blockEntity.getMainNode().getGrid();
+            if (grid == null) throw new LuaException("Cannot connect to AE2 Network");
+
+            MEStorage storage = grid.getStorageService().getInventory();
+
+            Optional<Item> maybeItem = BuiltInRegistries.ITEM.getOptional(new ResourceLocation(id));
+
+            if (maybeItem.isEmpty()) throw new LuaException("Invalid item id " + id);
+
+            ItemVariant itemVariant = ItemVariant.of(maybeItem.get());
+
+            AEItemKey key = AEItemKey.of(itemVariant);
+
+            IActionSource source = IActionSource.ofMachine(blockEntity);
+
+            long availableSpace = storage.insert(key, count, Actionable.SIMULATE, source);
+
+            if (availableSpace == 0) return 0;
+
+            long itemsImported;
+
+            try (Transaction transaction = Transaction.openOuter()) {
+                long itemsAvailable = container.extract(itemVariant, availableSpace, transaction);
+                if (itemsAvailable == 0)
+                    // cancel transaction implicitly
+                    return 0;
+                itemsImported = storage.insert(key, itemsAvailable, Actionable.MODULATE, IActionSource.ofMachine(blockEntity));
+                transaction.commit();
+            }
+
+            return itemsImported;
+        }
+
+        private double exportItemCommon(Storage<ItemVariant> container, String id, long count) throws LuaException {
+            IGrid grid = blockEntity.getMainNode().getGrid();
+            if (grid == null) throw new LuaException("Cannot connect to AE2 Network");
+
+            MEStorage storage = grid.getStorageService().getInventory();
+
+            Optional<Item> item = BuiltInRegistries.ITEM.getOptional(new ResourceLocation(id));
+
+            if (item.isEmpty()) throw new LuaException("Invalid item id " + id);
+
+            ItemVariant itemVariant = ItemVariant.of(item.get());
+
+            AEItemKey key = AEItemKey.of(itemVariant);
+
+            long availableItems = storage.extract(key, count, Actionable.SIMULATE, IActionSource.ofMachine(blockEntity));
+
+            if (availableItems == 0) return 0;
+
+            long itemsExported;
+
+            try (Transaction transaction = Transaction.openOuter()) {
+                long availableSpace = container.simulateInsert(itemVariant, availableItems, transaction);
+
+                if (availableSpace == 0) return 0;
+
+
+                itemsExported = storage.extract(key, availableSpace, Actionable.MODULATE, IActionSource.ofMachine(blockEntity));
+
+                container.insert(itemVariant, itemsExported, transaction);
+
+                transaction.commit();
+            }
+
+            return itemsExported;
+        }
+
+        @LuaFunction(mainThread = true)
+        public final double importItem(String id, long count, String dir) throws LuaException {
+            final Direction side = getSide(dir);
+
+            Storage<ItemVariant> container = ItemStorage.SIDED.find(blockEntity.level, blockEntity.getBlockPos().relative(side), side.getOpposite());
+
+            if (container == null) throw new LuaException("No container on side " + dir);
+
+            return importItemCommon(container, id, count);
+
+        }
+
+        @LuaFunction(mainThread = true)
+        public final double exportItem(String id, long count, String dir) throws LuaException {
+            final Direction side = getSide(dir);
+
+            Storage<ItemVariant> container = ItemStorage.SIDED.find(blockEntity.level, blockEntity.getBlockPos().relative(side), side.getOpposite());
+
+            if (container == null) throw new LuaException("No container on side " + dir);
+
+            return exportItemCommon(container, id, count);
+        }
+
+        @LuaFunction(mainThread = true)
+        public final double importItemFromPeripheral(IComputerAccess computer, String id, long count, String name) throws LuaException {
+            IPeripheral peripheral = computer.getAvailablePeripheral(name);
+            if (peripheral == null) throw new LuaException("No such peripheral " + name);
+
+            SlottedStorage<ItemVariant> container = extractHandler(peripheral);
+
+            if (container == null) throw new LuaException("Peripheral " + name + " is not an inventory");
+
+            return importItemCommon(container, id, count);
+        }
+
+        @LuaFunction(mainThread = true)
+        public final double exportItemToPeripheral(IComputerAccess computer, String id, long count, String name) throws LuaException {
+            IPeripheral peripheral = computer.getAvailablePeripheral(name);
+            if (peripheral == null) throw new LuaException("No such peripheral " + name);
+
+            SlottedStorage<ItemVariant> container = extractHandler(peripheral);
+
+            if (container == null) throw new LuaException("Peripheral " + name + " is not a container");
+
+            return exportItemCommon(container, id, count);
+        }
+
+        @LuaFunction(mainThread = true)
+        public final List<Map<String, Object>> listItems() throws LuaException {
+            IGrid grid = blockEntity.getMainNode().getGrid();
+            if (grid == null) throw new LuaException("Cannot connect to AE2 Network");
+
+            MEStorage inventory = grid.getStorageService().getInventory();
+            KeyCounter keyCounter = inventory.getAvailableStacks();
+
+            return StreamSupport.stream(keyCounter.spliterator(), false)
+                    .map(it -> {
+                       AEKey key = it.getKey();
+                       long value = it.getLongValue();
+
+                       if (key instanceof AEItemKey itemKey) {
+                           return Map.<String, Object>of(
+                                   "id", key.getId().toString(),
+                                   "displayName", key.getDisplayName().getString(),
+                                   "amount", value
+                           );
+                       }
+
+                       return null;
+                    }).filter(Objects::nonNull).toList();
         }
 
     }
